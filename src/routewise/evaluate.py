@@ -20,6 +20,7 @@ LAMBDAS = np.concatenate([[0.0], np.logspace(0, 5, 120)])
 
 class Router(Protocol):
     name: str
+    uses_task: bool
 
     def predict(self, data: Any, train: IntArray, test: IntArray) -> FloatArray: ...
 
@@ -113,18 +114,48 @@ def folds(scenarios: NDArray[np.str_], k: int, seed: int) -> list[IntArray]:
     return [np.sort(np.array(p, dtype=np.int64)) for p in parts]
 
 
-def route_cv(data: RoutingData, router: Router, k: int = 5, seed: int = 0) -> NDArray[np.int64]:
-    """Out-of-fold model choice for every prompt at every lambda: (lambdas, prompts)."""
+def route_cv(
+    data: RoutingData, router: Router, k: int = 5, seed: int = 0
+) -> tuple[NDArray[np.int64], FloatArray]:
+    """Out-of-fold routing for every prompt.
+
+    Returns the chosen model at every lambda, shape (lambdas, prompts), and the
+    predicted probability of each model being correct, shape (prompts, models).
+    """
     choices = np.zeros((len(LAMBDAS), len(data.uids)), dtype=np.int64)
+    p_correct = np.zeros_like(data.correct)
     parts = folds(data.scenarios, k, seed)
     everything = np.arange(len(data.uids))
     for test in parts:
         train = np.setdiff1d(everything, test)
         p = router.predict(data, train, test)
-        c = expected_cost(data, train, test)
+        c = expected_cost(data, train, test, by_task=router.uses_task)
+        p_correct[test] = p
         for i, lam in enumerate(LAMBDAS):
             choices[i, test] = select(p, c, float(lam))
-    return choices
+    return choices, p_correct
+
+
+def calibration(p: FloatArray, correct: FloatArray, bins: int = 10) -> dict[str, Any]:
+    """Brier score, expected calibration error and a reliability table over all pairs."""
+    p, y = p.ravel(), correct.ravel()
+    edges = np.linspace(0, 1, bins + 1)
+    which = np.clip(np.digitize(p, edges[1:-1]), 0, bins - 1)
+    table = []
+    ece = 0.0
+    for b in range(bins):
+        mask = which == b
+        if mask.any():
+            gap = abs(p[mask].mean() - y[mask].mean())
+            ece += mask.mean() * gap
+            table.append(
+                {
+                    "predicted": float(p[mask].mean()),
+                    "observed": float(y[mask].mean()),
+                    "share": float(mask.mean()),
+                }
+            )
+    return {"brier": float(np.mean((p - y) ** 2)), "ece": float(ece), "reliability": table}
 
 
 def curve(data: RoutingData, choices: NDArray[np.int64], rows: IntArray) -> FloatArray:
@@ -194,7 +225,11 @@ def _best_within(points: FloatArray, budget: float) -> float | None:
 
 
 def summarize(
-    data: RoutingData, results: dict[str, NDArray[np.int64]], n_boot: int = 1000, seed: int = 0
+    data: RoutingData,
+    results: dict[str, NDArray[np.int64]],
+    predictions: dict[str, FloatArray] | None = None,
+    n_boot: int = 1000,
+    seed: int = 0,
 ) -> dict[str, Any]:
     rows = np.arange(len(data.uids))
     singles = single_points(data, rows)
@@ -269,4 +304,6 @@ def summarize(
             summary["routers"][name]["mix_at_match"] = {
                 m.name: float((picks == j).mean()) for j, m in enumerate(data.models)
             }
+        if predictions and name in predictions:
+            summary["routers"][name]["calibration"] = calibration(predictions[name], data.correct)
     return summary

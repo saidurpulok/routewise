@@ -60,14 +60,16 @@ Together AI's prices, since HELM ran them through Together.
 the model answers correctly. All routers then share one rule: choose the model
 that maximizes `p_correct - λ · expected_cost`, and sweep `λ` to trace a
 cost-accuracy curve. Expected cost uses only what is known before sending a
-request: the prompt's real token count and the task's average output length on
-training prompts.
+request: the prompt's real token count and the model's average output length on
+training prompts of the same task (or on all training prompts, for the router
+that doesn't see the task).
 
 | Router | What it uses |
 | --- | --- |
 | Task-aware | each model's training accuracy on the prompt's task |
 | kNN (TF-IDF) | the 25 most similar training prompts, smoothed toward the task average |
 | Logistic (TF-IDF) | one logistic regression per model on TF-IDF features and the task label |
+| Logistic (text only) | the same, but with no task label anywhere, including the cost estimate |
 
 **Evaluation.** 5-fold cross-validation, stratified by task, so every routing
 decision is made by a router that never saw that prompt. Savings come with a 95%
@@ -98,6 +100,7 @@ picks the cheapest correct model.
 | Task-aware | **79.6%** | **1.30** | 29.8% (−0.3 to 40.6%) |
 | kNN (TF-IDF) | 78.6% | 1.48 | 19.7% (−1.0 to 26.7%) |
 | Logistic (TF-IDF) | 78.4% | 1.39 | 24.9% (5.4 to 32.6%) |
+| Logistic (text only) | 77.9% | 1.59 | 14.0% (4.2 to 19.8%) |
 | Oracle (upper bound) | 92.1% | 0.77 | |
 
 - **Open-weight models lead this mix.** Qwen3 235B and gpt-oss-120b are the two
@@ -112,9 +115,10 @@ picks the cheapest correct model.
   79.6%, 3.1 points above Qwen3, by sending each task to the model that is best
   at it. It's up to 4.0 points above the best mix of two single models at the
   same cost.
-- **Reading the prompt doesn't help here.** The text-based routers do no better
-  than the task-aware one. Word overlap says little about which model will solve
-  a graduate-level science question.
+- **Reading the prompt doesn't help here, but knowing the task does.** The
+  text-based routers do no better than the task-aware one. Without the task
+  label, the saving drops to 14%. Word overlap says little about which model
+  will solve a graduate-level science question.
 - **The headroom is large.** The oracle reaches 92.1% for $0.77, so a better
   quality predictor has a lot to gain.
 
@@ -143,6 +147,7 @@ When matching Qwen3, the task-aware router sends 48% of prompts to gpt-oss-120b,
 | Task-aware | 82.5% | 0.244 | 92.7% (92.2–93.9%) |
 | kNN (TF-IDF) | 82.9% | 0.187 | 94.4% (93.3–94.9%) |
 | Logistic (TF-IDF) | **83.6%** | **0.188** | **94.4% (93.9–95.1%)** |
+| Logistic (text only) | 83.4% | 0.187 | 94.4% (93.8–95.0%) |
 | Oracle (upper bound) | 94.5% | 0.184 | |
 
 - **The headline saving is mostly DeepSeek-V3.** It matches GPT-4o's accuracy to
@@ -153,7 +158,8 @@ When matching Qwen3, the task-aware router sends 48% of prompts to gpt-oss-120b,
   reaches 83.6%, 4.5 points above GPT-4o, for $2.25 per 1k prompts. It's up to
   10.5 points above the best mix of two single models at the same cost.
 - **Here the prompt text helps.** Reading the prompt makes matching GPT-4o 23%
-  cheaper than the task label alone.
+  cheaper than the task label alone, and the text-only router does just as well
+  as the ones given the label, so the label isn't needed on these tasks.
 
 The full plots are in [results/lite/plots](results/lite/plots).
 
@@ -166,6 +172,36 @@ the board, so the cheapest good choice is often obvious and a router's job is
 smaller. A claim like "routing saves 90%" only means something next to the best
 single model it's compared with.
 
+## Are the predicted probabilities trustworthy?
+
+The selection rule trusts each router's probability that a model gets a prompt
+right, so I checked them on the out-of-fold predictions. All four routers are
+well calibrated: when a router says 70%, the model is right about 70% of the
+time. The expected calibration error is below 0.03 everywhere.
+
+Better probabilities don't automatically mean better routing, though. On the 2025
+suite the TF-IDF logistic router has the best Brier score (0.188, against 0.202
+for the task-aware router), but it doesn't route better.
+
+![Calibration of the routers on the 2025 suite](results/capabilities/plots/calibration.png)
+
+## Related work
+
+routewise doesn't propose a new routing method. It's a small, reproducible
+evaluation of simple ones on public data.
+
+- [FrugalGPT](https://arxiv.org/abs/2305.05176) (Chen, Zaharia and Zou, 2023)
+  cuts cost with an LLM cascade: try cheap models first and stop when a scorer
+  is confident.
+- [RouterBench](https://arxiv.org/abs/2403.12031) (Hu et al., 2024) is a
+  benchmark of precomputed outputs for evaluating routers, with the same kind of
+  cost-quality curves and oracle used here.
+- [RouteLLM](https://arxiv.org/abs/2406.18665) (Ong et al., ICLR 2025) trains
+  routers between a strong and a weak model from human preference data.
+
+The difference here is the data: HELM's per-question results for current
+models, with real token counts, plus the corrections those counts need.
+
 ## Caveats
 
 - **List prices, not your bill.** Prices change, and batch discounts, caching and
@@ -177,8 +213,9 @@ single model it's compared with.
   fixed prompt format, and some scores reflect answer formatting more than
   ability. IFEval counts a prompt as correct only when every instruction in it
   was followed.
-- **Routers use the task label.** Real traffic rarely comes labeled. The text
-  routers read the prompt too, but they also get the label.
+- **Most routers use the task label.** Real traffic rarely comes labeled. The
+  text-only router shows what that's worth: nothing on the 2024 tasks, about
+  half the saving on the 2025 ones.
 - **One run per model, binary correctness.** HELM ran each prompt once, so
   sampling noise in the outcomes isn't modeled.
 - **The matched point is picked on the evaluation curve**, so it's slightly
@@ -189,9 +226,9 @@ single model it's compared with.
 You need Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv sync --group dev
+uv sync --locked --group dev
 uv run routewise fetch   # about 260 MB of HELM files for the 2025 suite
-uv run routewise run     # cross-validates the three routers, a few minutes on a laptop
+uv run routewise run     # cross-validates the four routers, a few minutes on a laptop
 uv run routewise plot    # redraws the plots from results.json
 
 uv run routewise --suite lite fetch   # the same for the 2024 suite (about 30 MB)
@@ -209,8 +246,9 @@ The tests use small synthetic data, so they need no download.
 ## Repository layout
 
 - `src/routewise/data.py`: finds and downloads HELM runs, builds the routing table
-- `src/routewise/routers.py`: the three routers and the shared selection rule
-- `src/routewise/evaluate.py`: cross-validation, curves, baselines, bootstrap
+- `src/routewise/routers.py`: the routers and the shared selection rule
+- `src/routewise/evaluate.py`: cross-validation, curves, baselines, bootstrap,
+  calibration
 - `src/routewise/plot.py`, `src/routewise/cli.py`: figures and the command line
 - `configs/<suite>/`: models, prices and tasks
 - `results/<suite>/`: results and plots
@@ -218,10 +256,8 @@ The tests use small synthetic data, so they need no download.
 ## What I'd try next
 
 - Reasoning models, using a source that records thinking tokens.
-- Routers that don't need the task label, and a small fine-tuned encoder in
-  place of TF-IDF.
-- Calibration checks on the predicted probabilities, since the selection rule
-  relies on them.
+- A stronger label-free router, using sentence embeddings or a small
+  fine-tuned encoder in place of TF-IDF.
 - A cascade that tries a cheap model first and escalates on low confidence.
 
 ## License

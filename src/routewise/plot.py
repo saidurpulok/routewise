@@ -13,7 +13,7 @@ import numpy as np  # noqa: E402
 
 from routewise.evaluate import hull_accuracy, pareto  # noqa: E402
 
-SERIES = ["#2a78d6", "#eb6834", "#1baf7a"]
+SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]
 _SUITES = {"lite": "HELM Lite", "capabilities": "HELM Capabilities"}
 INK, MUTED, GRID, SURFACE = "#0b0b0b", "#52514e", "#e4e3df", "#fcfcfb"
 
@@ -134,8 +134,41 @@ def mix(summary: dict[str, Any], router: str, path: Path) -> None:
     plt.close(fig)
 
 
+def reliability(summary: dict[str, Any], path: Path) -> None:
+    """Predicted probability of a correct answer against how often it was correct."""
+    routers = {n: r["calibration"] for n, r in summary["routers"].items() if "calibration" in r}
+    if not routers:
+        return
+    fig, ax = plt.subplots(figsize=(5.5, 5.2), facecolor=SURFACE)
+    _style(ax)
+    ax.plot([0, 1], [0, 1], color=MUTED, linestyle="--", linewidth=1, label="Perfect calibration")
+    for color, (name, cal) in zip(SERIES, routers.items(), strict=False):
+        table = [b for b in cal["reliability"] if b["share"] >= 0.005]  # skip near-empty bins
+        ax.plot(
+            [b["predicted"] for b in table],
+            [b["observed"] for b in table],
+            color=color,
+            linewidth=2,
+            marker="o",
+            markersize=4,
+            label=f"{name} (Brier {cal['brier']:.3f})",
+        )
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Predicted chance the model is correct", color=INK)
+    ax.set_ylabel("Share actually correct", color=INK)
+    ax.set_title(
+        "Calibration (out-of-fold, all prompt-model pairs)", color=INK, fontsize=10, loc="left"
+    )
+    ax.legend(frameon=False, fontsize=8, loc="upper left", labelcolor=INK)
+    fig.tight_layout()
+    fig.savefig(path, dpi=160, facecolor=SURFACE)
+    plt.close(fig)
+
+
 def draw(summary: dict[str, Any], outdir: Path) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
     cost_quality(summary, outdir / "cost_quality.png")
     best_router = max(summary["routers"], key=lambda r: summary["routers"][r]["max_accuracy"])
     mix(summary, best_router, outdir / "routing_mix.png")
+    reliability(summary, outdir / "calibration.png")

@@ -43,13 +43,20 @@ def main(argv: list[str] | None = None) -> None:
         print(f"wrote {rows} records for {prompts} prompts")
     elif args.command == "run":
         data = load_data(data_dir / "processed", models)
-        routers: list[Router] = [TaskRouter(), KNNRouter(), LogisticRouter()]
+        routers: list[Router] = [
+            TaskRouter(),
+            KNNRouter(),
+            LogisticRouter(),
+            LogisticRouter(use_task=False),
+        ]
         results: dict[str, Any] = {}
+        predictions: dict[str, Any] = {}
         for router in routers:
             start = time.time()
-            results[router.name] = route_cv(data, router, k=args.folds, seed=args.seed)
+            choices, p = route_cv(data, router, k=args.folds, seed=args.seed)
+            results[router.name], predictions[router.name] = choices, p
             print(f"{router.name}: {time.time() - start:.1f}s")
-        summary = {"suite": suite.name, **summarize(data, results)}
+        summary = {"suite": suite.name, **summarize(data, results, predictions)}
         summary["config"] = {
             "folds": args.folds,
             "seed": args.seed,
