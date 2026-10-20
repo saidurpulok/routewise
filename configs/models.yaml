@@ -1,0 +1,46 @@
+# Model pool and list prices in USD per 1M tokens (input, output).
+# Prices are public list prices from each provider's pricing page (or Together AI
+# for open-weight Llama and Qwen models). They change over time; edit them here
+# and rerun to see how routing decisions shift.
+helm_release_note: HELM Lite per-instance results, crfm-helm-public bucket
+models:
+  - id: google_gemini-1.5-flash-002
+    name: Gemini 1.5 Flash
+    input: 0.075
+    output: 0.30
+  - id: openai_gpt-4o-mini-2024-07-18
+    name: GPT-4o mini
+    input: 0.15
+    output: 0.60
+  - id: meta_llama-3.1-8b-instruct-turbo
+    name: Llama 3.1 8B
+    input: 0.18
+    output: 0.18
+  - id: deepseek-ai_deepseek-v3
+    name: DeepSeek-V3
+    input: 0.27
+    output: 1.10
+  - id: qwen_qwen2.5-7b-instruct-turbo
+    name: Qwen2.5 7B
+    input: 0.30
+    output: 0.30
+  - id: anthropic_claude-3-5-haiku-20241022
+    name: Claude 3.5 Haiku
+    input: 0.80
+    output: 4.00
+  - id: meta_llama-3.1-70b-instruct-turbo
+    name: Llama 3.1 70B
+    input: 0.88
+    output: 0.88
+  - id: google_gemini-1.5-pro-002
+    name: Gemini 1.5 Pro
+    input: 1.25
+    output: 5.00
+  - id: openai_gpt-4o-2024-08-06
+    name: GPT-4o
+    input: 2.50
+    output: 10.00
+  - id: anthropic_claude-3-5-sonnet-20241022
+    name: Claude 3.5 Sonnet
+    input: 3.00
+    output: 15.00

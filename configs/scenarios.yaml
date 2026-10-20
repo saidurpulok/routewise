@@ -1,0 +1,9 @@
+# HELM Lite scenarios with a binary per-question correctness metric.
+# prefix: run-name prefix; metric: the per-instance stat HELM reports as correct (1) or not (0).
+scenarios:
+  gsm8k: {prefix: "gsm:", metric: final_number_exact_match}
+  math: {prefix: "math:", metric: math_equiv_chain_of_thought}
+  mmlu: {prefix: "mmlu:", metric: exact_match}
+  med_qa: {prefix: "med_qa:", metric: quasi_exact_match}
+  legalbench: {prefix: "legalbench:", metric: quasi_exact_match}
+  openbookqa: {prefix: "commonsense:", metric: exact_match}
