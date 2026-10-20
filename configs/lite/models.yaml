@@ -2,7 +2,6 @@
 # Prices are public list prices from each provider's pricing page (or Together AI
 # for open-weight Llama and Qwen models). They change over time; edit them here
 # and rerun to see how routing decisions shift.
-helm_release_note: HELM Lite per-instance results, crfm-helm-public bucket
 models:
   - id: google_gemini-1.5-flash-002
     name: Gemini 1.5 Flash

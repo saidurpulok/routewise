@@ -6,6 +6,7 @@ from routewise.evaluate import (
     cost_to_reach,
     folds,
     hull_accuracy,
+    impute_output_tokens,
     oracle_point,
     pareto,
     route_cv,
@@ -117,3 +118,13 @@ def test_oracle_and_summary() -> None:
     assert summary["best_single"]["name"] == "Big"
     assert router["saving_vs_best"] > 0.3
     assert router["max_gain_over_single_model_hull"] > 0
+
+
+def test_missing_output_tokens_are_imputed_per_prompt() -> None:
+    models = [Model(str(i), f"M{i}", 1.0, 1.0) for i in range(3)]
+    scenarios = np.array(["a", "a", "b"])
+    tokens = np.array([[10.0, 0.0, 30.0], [20.0, 0.0, 40.0], [5.0, 7.0, 9.0]])
+    filled, imputed = impute_output_tokens(tokens, scenarios, models)
+    assert filled[:, 1].tolist() == [20.0, 30.0, 7.0]  # median of the others, task a only
+    assert imputed == {"M1": ["a"]}
+    assert tokens[0, 1] == 0.0  # input left untouched

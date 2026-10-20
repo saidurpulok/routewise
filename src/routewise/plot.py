@@ -14,6 +14,7 @@ import numpy as np  # noqa: E402
 from routewise.evaluate import hull_accuracy, pareto  # noqa: E402
 
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a"]
+_SUITES = {"lite": "HELM Lite", "capabilities": "HELM Capabilities"}
 INK, MUTED, GRID, SURFACE = "#0b0b0b", "#52514e", "#e4e3df", "#fcfcfb"
 
 
@@ -32,6 +33,7 @@ def cost_quality(summary: dict[str, Any], path: Path) -> None:
     fig, ax = plt.subplots(figsize=(8.5, 5.5), facecolor=SURFACE)
     _style(ax)
     models = summary["models"]
+    suite = summary.get("suite", "lite")
     singles = np.array([[m["accuracy"], m["cost_per_1k"]] for m in models])
     ax.scatter(
         singles[:, 1],
@@ -43,13 +45,20 @@ def cost_quality(summary: dict[str, Any], path: Path) -> None:
         linewidths=1.5,
         label="Single model",
     )
+    best_acc = summary["best_single"]["accuracy"]
     for m in models:
-        # Points on the flat stretch of the mixing line get their label above it.
-        above = m["accuracy"] >= summary["best_single"]["accuracy"] - 0.005
+        # Labels sit just right of each point. Points on the flat stretch of the mixing
+        # line go below it, and the upper point of a near-overlapping pair goes above.
+        x, y = np.log10(m["cost_per_1k"]), m["accuracy"]
+        crowded = any(
+            abs(np.log10(o["cost_per_1k"]) - x) < 0.12 and 0 < y - o["accuracy"] < 0.03
+            for o in models
+        )
+        dy = 5 if crowded else -11 if y >= best_acc - 0.005 else -3
         ax.annotate(
             m["name"],
-            (m["cost_per_1k"], m["accuracy"]),
-            xytext=(4, 5 if above else -3),
+            (m["cost_per_1k"], y),
+            xytext=(4, dy),
             textcoords="offset points",
             fontsize=8,
             color=MUTED,
@@ -85,7 +94,8 @@ def cost_quality(summary: dict[str, Any], path: Path) -> None:
     ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=0))
     ax.xaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter("$%.2g"))
     ax.set_title(
-        f"Routing across {len(models)} models on {summary['prompts']:,} HELM Lite prompts"
+        f"Routing across {len(models)} models on {summary['prompts']:,} {_SUITES.get(suite, suite)}"
+        " prompts"
         " (5-fold CV)",
         color=INK,
         fontsize=11,

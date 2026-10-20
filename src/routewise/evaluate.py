@@ -36,6 +36,32 @@ class RoutingData:
     input_price: FloatArray
     output_price: FloatArray
     models: list[Model] = field(default_factory=list)
+    imputed: dict[str, list[str]] = field(default_factory=dict)
+
+
+def impute_output_tokens(
+    output_tokens: FloatArray, scenarios: NDArray[np.str_], models: list[Model]
+) -> tuple[FloatArray, dict[str, list[str]]]:
+    """Fill in output lengths HELM didn't record.
+
+    For some providers HELM stores zero output tokens on every prompt, which would
+    make those models look almost free. Where a model's output count is zero for a
+    whole task, use the median output length of the other models on each prompt.
+    """
+    out = output_tokens.copy()
+    imputed: dict[str, list[str]] = {}
+    for scenario in np.unique(scenarios):
+        rows = scenarios == scenario
+        missing = (output_tokens[rows] == 0).all(axis=0)
+        if missing.all() or not missing.any():
+            continue
+        fill = np.median(output_tokens[rows][:, ~missing], axis=1)
+        block = out[rows]
+        block[:, missing] = fill[:, None]
+        out[rows] = block
+        for m in np.flatnonzero(missing):
+            imputed.setdefault(models[m].name, []).append(str(scenario))
+    return out, imputed
 
 
 def load_data(processed: Path, models: list[Model]) -> RoutingData:
@@ -58,11 +84,13 @@ def load_data(processed: Path, models: list[Model]) -> RoutingData:
     arr = np.array([[values[u][m] for m in range(len(models))] for u in uids], dtype=np.float64)
     input_price = np.array([m.input for m in models]) / 1e6
     output_price = np.array([m.output for m in models]) / 1e6
-    correct, prompt_tokens, output_tokens = arr[..., 0], arr[..., 1], arr[..., 2]
+    correct, prompt_tokens = arr[..., 0], arr[..., 1]
+    scenarios = np.array([prompts[u]["scenario"] for u in uids])
+    output_tokens, imputed = impute_output_tokens(arr[..., 2], scenarios, models)
     return RoutingData(
         uids=uids,
         texts=[prompts[u]["text"] for u in uids],
-        scenarios=np.array([prompts[u]["scenario"] for u in uids]),
+        scenarios=scenarios,
         correct=correct,
         cost=prompt_tokens * input_price + output_tokens * output_price,
         prompt_tokens=prompt_tokens,
@@ -70,6 +98,7 @@ def load_data(processed: Path, models: list[Model]) -> RoutingData:
         input_price=input_price,
         output_price=output_price,
         models=models,
+        imputed=imputed,
     )
 
 
@@ -193,6 +222,7 @@ def summarize(
             "cost_per_1k": float(1000 * best_cost),
         },
         "oracle": {"accuracy": oracle_acc, "cost_per_1k": 1000 * oracle_cost},
+        "imputed_output_tokens": data.imputed,
         "routers": {},
     }
     rng = np.random.default_rng(seed)

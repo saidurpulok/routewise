@@ -1,4 +1,4 @@
-"""Download HELM Lite per-instance results and build the routing table.
+"""Download HELM per-instance results and build the routing table.
 
 HELM publishes, for every model and scenario, each question it asked, the model's
 answer, the token counts and whether the answer was scored correct. That is
@@ -18,11 +18,10 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 LIST_URL = "https://storage.googleapis.com/storage/v1/b/crfm-helm-public/o"
-FILE_URL = "https://storage.googleapis.com/crfm-helm-public/lite/benchmark_output/runs"
-RUN_PREFIX = "lite/benchmark_output/runs/"
-RELEASES = [f"v1.{i}.0" for i in range(14)]
+FILE_URL = "https://storage.googleapis.com/crfm-helm-public"
 
 
 @dataclass(frozen=True)
@@ -52,12 +51,25 @@ def _get_json(url: str, retries: int = 4) -> object:
     raise RuntimeError(f"failed to fetch {url}") from last
 
 
-def list_runs() -> list[Run]:
+@dataclass(frozen=True)
+class Suite:
+    """A HELM leaderboard: its bucket folder and how many releases it has published."""
+
+    name: str
+    releases: int
+    scenarios: dict[str, dict[str, Any]]
+
+    @property
+    def prefix(self) -> str:
+        return f"{self.name}/benchmark_output/runs/"
+
+
+def list_runs(suite: Suite) -> list[Run]:
     runs: list[Run] = []
-    for release in RELEASES:
+    for release in (f"v1.{i}.0" for i in range(suite.releases)):
         token = None
         while True:
-            query = {"prefix": f"{RUN_PREFIX}{release}/", "delimiter": "/", "maxResults": "1000"}
+            query = {"prefix": f"{suite.prefix}{release}/", "delimiter": "/", "maxResults": "1000"}
             if token:
                 query["pageToken"] = token
             page = _get_json(f"{LIST_URL}?{urllib.parse.urlencode(query)}")
@@ -71,7 +83,7 @@ def list_runs() -> list[Run]:
 
 
 def select_runs(
-    runs: Iterable[Run], models: list[str], scenarios: dict[str, dict[str, str]]
+    runs: Iterable[Run], models: list[str], scenarios: dict[str, dict[str, Any]]
 ) -> dict[tuple[str, str], Run]:
     """Pick one run per (model, run key) for the configured scenarios.
 
@@ -98,12 +110,12 @@ def select_runs(
     return selected
 
 
-def _download(run: Run, filename: str, cache: Path) -> Path:
+def _download(suite: Suite, run: Run, filename: str, cache: Path) -> Path:
     path = cache / run.release / run.name / filename
     if path.exists() and path.stat().st_size > 0:
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
-    url = f"{FILE_URL}/{run.release}/{urllib.parse.quote(run.name)}/{filename}"
+    url = f"{FILE_URL}/{suite.prefix}{run.release}/{urllib.parse.quote(run.name)}/{filename}"
     data = _get_json(url)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data))
@@ -111,23 +123,22 @@ def _download(run: Run, filename: str, cache: Path) -> Path:
     return path
 
 
-def scenario_of(key: str, scenarios: dict[str, dict[str, str]]) -> str:
+def scenario_of(key: str, scenarios: dict[str, dict[str, Any]]) -> str:
     for name, spec in scenarios.items():
         if key.startswith(spec["prefix"]):
             return name
     raise KeyError(key)
 
 
-def build_table(
-    models: list[str], scenarios: dict[str, dict[str, str]], cache: Path, out: Path
-) -> tuple[int, int]:
+def build_table(suite: Suite, models: list[str], cache: Path, out: Path) -> tuple[int, int]:
     """Download what is needed and write records.csv.gz and prompts.jsonl.gz."""
-    selected = select_runs(list_runs(), models, scenarios)
+    scenarios = suite.scenarios
+    selected = select_runs(list_runs(suite), models, scenarios)
     jobs = [(run, "display_predictions.json") for run in selected.values()]
     keys = sorted({key for _, key in selected})
     jobs += [(selected[(models[0], key)], "instances.json") for key in keys]
     with ThreadPoolExecutor(max_workers=8) as pool:
-        list(pool.map(lambda job: _download(job[0], job[1], cache), jobs))
+        list(pool.map(lambda job: _download(suite, job[0], job[1], cache), jobs))
 
     out.mkdir(parents=True, exist_ok=True)
     prompts: dict[str, dict[str, str]] = {}
@@ -146,6 +157,7 @@ def build_table(
         for (model, key), run in sorted(selected.items()):
             scenario = scenario_of(key, scenarios)
             metric = scenarios[scenario]["metric"]
+            threshold = float(scenarios[scenario].get("threshold", 0.5))
             path = cache / run.release / run.name / "display_predictions.json"
             for prediction in json.loads(path.read_text()):
                 if prediction.get("train_trial_index", 0) != 0:
@@ -159,7 +171,7 @@ def build_table(
                         uid,
                         scenario,
                         model,
-                        int(stats[metric] >= 0.5),
+                        int(stats[metric] >= threshold - 1e-9),
                         int(stats.get("num_prompt_tokens", 0)),
                         int(stats.get("num_output_tokens", 0)),
                     ]
