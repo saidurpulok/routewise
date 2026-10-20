@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from routewise.config import load_models, load_scenarios
+from routewise.config import load_models, load_suite
 from routewise.data import build_table
 from routewise.evaluate import Router, load_data, route_cv, summarize
 from routewise.routers import KNNRouter, LogisticRouter, TaskRouter
@@ -18,52 +18,60 @@ from routewise.routers import KNNRouter, LogisticRouter, TaskRouter
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="routewise")
-    parser.add_argument("--models", type=Path, default=Path("configs/models.yaml"))
-    parser.add_argument("--scenarios", type=Path, default=Path("configs/scenarios.yaml"))
-    parser.add_argument("--data", type=Path, default=Path("data"))
+    parser.add_argument(
+        "--suite",
+        default="capabilities",
+        help="HELM leaderboard to use; reads configs/<suite>/, writes data/<suite>/ and "
+        "results/<suite>/ (default: capabilities)",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("fetch", help="download HELM Lite results and build the routing table")
+    sub.add_parser("fetch", help="download HELM results and build the routing table")
     run = sub.add_parser("run", help="cross-validate routers and write results")
-    run.add_argument("--output", type=Path, default=Path("results"))
     run.add_argument("--folds", type=int, default=5)
     run.add_argument("--seed", type=int, default=0)
-    plot = sub.add_parser("plot", help="draw figures from a results file")
-    plot.add_argument("--results", type=Path, default=Path("results/results.json"))
+    sub.add_parser("plot", help="draw figures from the results file")
     args = parser.parse_args(argv)
 
-    models = load_models(args.models)
+    configs, data_dir = Path("configs") / args.suite, Path("data") / args.suite
+    output = Path("results") / args.suite
+    models = load_models(configs / "models.yaml")
+    suite = load_suite(configs / "scenarios.yaml")
     if args.command == "fetch":
         rows, prompts = build_table(
-            [m.id for m in models],
-            load_scenarios(args.scenarios),
-            args.data / "cache",
-            args.data / "processed",
+            suite, [m.id for m in models], data_dir / "cache", data_dir / "processed"
         )
         print(f"wrote {rows} records for {prompts} prompts")
     elif args.command == "run":
-        data = load_data(args.data / "processed", models)
-        routers: list[Router] = [TaskRouter(), KNNRouter(), LogisticRouter()]
+        data = load_data(data_dir / "processed", models)
+        routers: list[Router] = [
+            TaskRouter(),
+            KNNRouter(),
+            LogisticRouter(),
+            LogisticRouter(use_task=False),
+        ]
         results: dict[str, Any] = {}
+        predictions: dict[str, Any] = {}
         for router in routers:
             start = time.time()
-            results[router.name] = route_cv(data, router, k=args.folds, seed=args.seed)
+            choices, p = route_cv(data, router, k=args.folds, seed=args.seed)
+            results[router.name], predictions[router.name] = choices, p
             print(f"{router.name}: {time.time() - start:.1f}s")
-        summary = summarize(data, results)
+        summary = {"suite": suite.name, **summarize(data, results, predictions)}
         summary["config"] = {
             "folds": args.folds,
             "seed": args.seed,
             "prices_usd_per_1m": {m.name: [m.input, m.output] for m in models},
         }
-        args.output.mkdir(parents=True, exist_ok=True)
-        (args.output / "results.json").write_text(json.dumps(summary, indent=2) + "\n")
-        np.savez_compressed(args.output / "choices.npz", **results)
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "results.json").write_text(json.dumps(summary, indent=2) + "\n")
+        np.savez_compressed(output / "choices.npz", **results)
         print(json.dumps({k: v for k, v in summary.items() if k != "routers"}, indent=2)[:2000])
         for name, r in summary["routers"].items():
             print(name, {k: v for k, v in r.items() if k not in ("curve",)})
     elif args.command == "plot":
         from routewise.plot import draw
 
-        draw(json.loads(args.results.read_text()), args.results.parent / "plots")
+        draw(json.loads((output / "results.json").read_text()), output / "plots")
 
 
 if __name__ == "__main__":

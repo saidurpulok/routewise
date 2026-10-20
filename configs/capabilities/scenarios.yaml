@@ -1,0 +1,13 @@
+# HELM Capabilities: https://crfm.stanford.edu/helm/capabilities/
+# prefix: run-name prefix; metric: the per-instance stat; threshold: the score that
+# counts as correct (default 0.5). IFEval counts a prompt correct only when every
+# instruction in it was followed (prompt-level strict accuracy).
+# WildBench is left out: it is scored on a sliding scale by an LLM judge and HELM
+# doesn't record its prompt token counts.
+suite: capabilities
+releases: 16  # v1.0.0 .. v1.15.0
+scenarios:
+  mmlu_pro: {prefix: "mmlu_pro:", metric: chain_of_thought_correctness}
+  gpqa: {prefix: "gpqa:", metric: chain_of_thought_correctness}
+  ifeval: {prefix: "ifeval:", metric: ifeval_strict_accuracy, threshold: 1.0}
+  omni_math: {prefix: "omni_math:", metric: omni_math_accuracy}

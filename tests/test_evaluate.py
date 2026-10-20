@@ -3,9 +3,11 @@ import numpy as np
 from routewise.config import Model
 from routewise.evaluate import (
     RoutingData,
+    calibration,
     cost_to_reach,
     folds,
     hull_accuracy,
+    impute_output_tokens,
     oracle_point,
     pareto,
     route_cv,
@@ -91,7 +93,7 @@ def test_expected_cost_uses_only_training_output_lengths() -> None:
 def test_routers_return_probabilities() -> None:
     data = synthetic()
     train, test = np.arange(0, 300, 2), np.arange(1, 300, 2)
-    for router in (TaskRouter(), KNNRouter(k=5), LogisticRouter()):
+    for router in (TaskRouter(), KNNRouter(k=5), LogisticRouter(), LogisticRouter(use_task=False)):
         p = router.predict(data, train, test)
         assert p.shape == (len(test), 2)
         assert np.all((p >= 0) & (p <= 1))
@@ -99,7 +101,8 @@ def test_routers_return_probabilities() -> None:
 
 def test_router_learns_the_task_split() -> None:
     data = synthetic()
-    choices = route_cv(data, TaskRouter(), k=5, seed=0)
+    choices, p = route_cv(data, TaskRouter(), k=5, seed=0)
+    assert p.shape == data.correct.shape
     # A moderate cost penalty: cheap model for easy prompts, big model for hard ones.
     mid = choices[len(choices) // 3]
     easy = data.scenarios == "easy"
@@ -112,8 +115,38 @@ def test_oracle_and_summary() -> None:
     acc, cost = oracle_point(data, np.arange(len(data.uids)))
     assert acc >= data.correct.mean(axis=0).max()
     assert cost <= data.cost[:, 1].mean()
-    summary = summarize(data, {"Task-aware": route_cv(data, TaskRouter())}, n_boot=20)
+    choices, p = route_cv(data, TaskRouter())
+    summary = summarize(data, {"Task-aware": choices}, {"Task-aware": p}, n_boot=20)
     router = summary["routers"]["Task-aware"]
     assert summary["best_single"]["name"] == "Big"
     assert router["saving_vs_best"] > 0.3
     assert router["max_gain_over_single_model_hull"] > 0
+    assert 0 <= router["calibration"]["brier"] <= 1
+
+
+def test_missing_output_tokens_are_imputed_per_prompt() -> None:
+    models = [Model(str(i), f"M{i}", 1.0, 1.0) for i in range(3)]
+    scenarios = np.array(["a", "a", "b"])
+    tokens = np.array([[10.0, 0.0, 30.0], [20.0, 0.0, 40.0], [5.0, 7.0, 9.0]])
+    filled, imputed = impute_output_tokens(tokens, scenarios, models)
+    assert filled[:, 1].tolist() == [20.0, 30.0, 7.0]  # median of the others, task a only
+    assert imputed == {"M1": ["a"]}
+    assert tokens[0, 1] == 0.0  # input left untouched
+
+
+def test_text_only_cost_ignores_the_task() -> None:
+    data = synthetic()
+    train, test = np.arange(0, 300, 2), np.arange(1, 300, 2)
+    data.output_tokens[train[data.scenarios[train] == "hard"]] = 50.0
+    by_task = expected_cost(data, train, test)
+    pooled = expected_cost(data, train, test, by_task=False)
+    easy = data.scenarios[test] == "easy"
+    assert not np.allclose(by_task[easy], pooled[easy])
+    assert np.allclose(pooled, pooled[0])  # same prompt length everywhere, so one value
+
+
+def test_calibration_of_perfect_and_constant_predictions() -> None:
+    y = np.array([[1.0, 0.0], [0.0, 1.0]])
+    assert calibration(y, y)["brier"] == 0.0
+    flat = calibration(np.full_like(y, 0.5), y)
+    assert flat["brier"] == 0.25 and flat["ece"] == 0.0

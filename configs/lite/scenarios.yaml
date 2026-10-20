@@ -1,5 +1,7 @@
-# HELM Lite scenarios with a binary per-question correctness metric.
+# HELM Lite: https://crfm.stanford.edu/helm/lite/
 # prefix: run-name prefix; metric: the per-instance stat HELM reports as correct (1) or not (0).
+suite: lite
+releases: 14  # v1.0.0 .. v1.13.0
 scenarios:
   gsm8k: {prefix: "gsm:", metric: final_number_exact_match}
   math: {prefix: "math:", metric: math_equiv_chain_of_thought}

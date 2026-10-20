@@ -20,6 +20,7 @@ LAMBDAS = np.concatenate([[0.0], np.logspace(0, 5, 120)])
 
 class Router(Protocol):
     name: str
+    uses_task: bool
 
     def predict(self, data: Any, train: IntArray, test: IntArray) -> FloatArray: ...
 
@@ -36,6 +37,32 @@ class RoutingData:
     input_price: FloatArray
     output_price: FloatArray
     models: list[Model] = field(default_factory=list)
+    imputed: dict[str, list[str]] = field(default_factory=dict)
+
+
+def impute_output_tokens(
+    output_tokens: FloatArray, scenarios: NDArray[np.str_], models: list[Model]
+) -> tuple[FloatArray, dict[str, list[str]]]:
+    """Fill in output lengths HELM didn't record.
+
+    For some providers HELM stores zero output tokens on every prompt, which would
+    make those models look almost free. Where a model's output count is zero for a
+    whole task, use the median output length of the other models on each prompt.
+    """
+    out = output_tokens.copy()
+    imputed: dict[str, list[str]] = {}
+    for scenario in np.unique(scenarios):
+        rows = scenarios == scenario
+        missing = (output_tokens[rows] == 0).all(axis=0)
+        if missing.all() or not missing.any():
+            continue
+        fill = np.median(output_tokens[rows][:, ~missing], axis=1)
+        block = out[rows]
+        block[:, missing] = fill[:, None]
+        out[rows] = block
+        for m in np.flatnonzero(missing):
+            imputed.setdefault(models[m].name, []).append(str(scenario))
+    return out, imputed
 
 
 def load_data(processed: Path, models: list[Model]) -> RoutingData:
@@ -58,11 +85,13 @@ def load_data(processed: Path, models: list[Model]) -> RoutingData:
     arr = np.array([[values[u][m] for m in range(len(models))] for u in uids], dtype=np.float64)
     input_price = np.array([m.input for m in models]) / 1e6
     output_price = np.array([m.output for m in models]) / 1e6
-    correct, prompt_tokens, output_tokens = arr[..., 0], arr[..., 1], arr[..., 2]
+    correct, prompt_tokens = arr[..., 0], arr[..., 1]
+    scenarios = np.array([prompts[u]["scenario"] for u in uids])
+    output_tokens, imputed = impute_output_tokens(arr[..., 2], scenarios, models)
     return RoutingData(
         uids=uids,
         texts=[prompts[u]["text"] for u in uids],
-        scenarios=np.array([prompts[u]["scenario"] for u in uids]),
+        scenarios=scenarios,
         correct=correct,
         cost=prompt_tokens * input_price + output_tokens * output_price,
         prompt_tokens=prompt_tokens,
@@ -70,6 +99,7 @@ def load_data(processed: Path, models: list[Model]) -> RoutingData:
         input_price=input_price,
         output_price=output_price,
         models=models,
+        imputed=imputed,
     )
 
 
@@ -84,18 +114,48 @@ def folds(scenarios: NDArray[np.str_], k: int, seed: int) -> list[IntArray]:
     return [np.sort(np.array(p, dtype=np.int64)) for p in parts]
 
 
-def route_cv(data: RoutingData, router: Router, k: int = 5, seed: int = 0) -> NDArray[np.int64]:
-    """Out-of-fold model choice for every prompt at every lambda: (lambdas, prompts)."""
+def route_cv(
+    data: RoutingData, router: Router, k: int = 5, seed: int = 0
+) -> tuple[NDArray[np.int64], FloatArray]:
+    """Out-of-fold routing for every prompt.
+
+    Returns the chosen model at every lambda, shape (lambdas, prompts), and the
+    predicted probability of each model being correct, shape (prompts, models).
+    """
     choices = np.zeros((len(LAMBDAS), len(data.uids)), dtype=np.int64)
+    p_correct = np.zeros_like(data.correct)
     parts = folds(data.scenarios, k, seed)
     everything = np.arange(len(data.uids))
     for test in parts:
         train = np.setdiff1d(everything, test)
         p = router.predict(data, train, test)
-        c = expected_cost(data, train, test)
+        c = expected_cost(data, train, test, by_task=router.uses_task)
+        p_correct[test] = p
         for i, lam in enumerate(LAMBDAS):
             choices[i, test] = select(p, c, float(lam))
-    return choices
+    return choices, p_correct
+
+
+def calibration(p: FloatArray, correct: FloatArray, bins: int = 10) -> dict[str, Any]:
+    """Brier score, expected calibration error and a reliability table over all pairs."""
+    p, y = p.ravel(), correct.ravel()
+    edges = np.linspace(0, 1, bins + 1)
+    which = np.clip(np.digitize(p, edges[1:-1]), 0, bins - 1)
+    table = []
+    ece = 0.0
+    for b in range(bins):
+        mask = which == b
+        if mask.any():
+            gap = abs(p[mask].mean() - y[mask].mean())
+            ece += mask.mean() * gap
+            table.append(
+                {
+                    "predicted": float(p[mask].mean()),
+                    "observed": float(y[mask].mean()),
+                    "share": float(mask.mean()),
+                }
+            )
+    return {"brier": float(np.mean((p - y) ** 2)), "ece": float(ece), "reliability": table}
 
 
 def curve(data: RoutingData, choices: NDArray[np.int64], rows: IntArray) -> FloatArray:
@@ -165,7 +225,11 @@ def _best_within(points: FloatArray, budget: float) -> float | None:
 
 
 def summarize(
-    data: RoutingData, results: dict[str, NDArray[np.int64]], n_boot: int = 1000, seed: int = 0
+    data: RoutingData,
+    results: dict[str, NDArray[np.int64]],
+    predictions: dict[str, FloatArray] | None = None,
+    n_boot: int = 1000,
+    seed: int = 0,
 ) -> dict[str, Any]:
     rows = np.arange(len(data.uids))
     singles = single_points(data, rows)
@@ -193,6 +257,7 @@ def summarize(
             "cost_per_1k": float(1000 * best_cost),
         },
         "oracle": {"accuracy": oracle_acc, "cost_per_1k": 1000 * oracle_cost},
+        "imputed_output_tokens": data.imputed,
         "routers": {},
     }
     rng = np.random.default_rng(seed)
@@ -239,4 +304,6 @@ def summarize(
             summary["routers"][name]["mix_at_match"] = {
                 m.name: float((picks == j).mean()) for j, m in enumerate(data.models)
             }
+        if predictions and name in predictions:
+            summary["routers"][name]["calibration"] = calibration(predictions[name], data.correct)
     return summary

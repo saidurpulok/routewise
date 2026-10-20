@@ -7,6 +7,8 @@ from pathlib import Path
 
 import yaml
 
+from routewise.data import Suite
+
 
 @dataclass(frozen=True)
 class Model:
@@ -24,5 +26,6 @@ def load_models(path: Path) -> list[Model]:
     return [Model(**{k: m[k] for k in ("id", "name", "input", "output")}) for m in data["models"]]
 
 
-def load_scenarios(path: Path) -> dict[str, dict[str, str]]:
-    return dict(yaml.safe_load(path.read_text())["scenarios"])
+def load_suite(path: Path) -> Suite:
+    data = yaml.safe_load(path.read_text())
+    return Suite(data["suite"], int(data["releases"]), dict(data["scenarios"]))

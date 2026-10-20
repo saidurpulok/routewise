@@ -33,12 +33,19 @@ class Dataset(Protocol):
     output_price: FloatArray  # (models,) USD per token
 
 
-def expected_cost(data: Dataset, train: IntArray, test: IntArray) -> FloatArray:
-    """Cost known before sending: real prompt tokens plus the task's mean output length."""
+def expected_cost(
+    data: Dataset, train: IntArray, test: IntArray, by_task: bool = True
+) -> FloatArray:
+    """Cost known before sending: real prompt tokens plus a mean output length.
+
+    The output length is each model's mean over training prompts of the same task,
+    or over all training prompts when the router may not use the task label.
+    """
     out = np.zeros((len(test), data.correct.shape[1]))
-    for scenario in np.unique(data.scenarios[test]):
-        tr = train[data.scenarios[train] == scenario]
-        te = data.scenarios[test] == scenario
+    groups = np.unique(data.scenarios[test]) if by_task else [None]
+    for scenario in groups:
+        tr = train if scenario is None else train[data.scenarios[train] == scenario]
+        te = np.ones(len(test), bool) if scenario is None else data.scenarios[test] == scenario
         mean_output = data.output_tokens[tr].mean(axis=0)
         out[te] = data.prompt_tokens[test[te]] * data.input_price + mean_output * data.output_price
     return out
@@ -56,6 +63,7 @@ class TaskRouter:
     """Uses only the task label: each model's training accuracy on that task."""
 
     name = "Task-aware"
+    uses_task = True
 
     def predict(self, data: Dataset, train: IntArray, test: IntArray) -> FloatArray:
         out = np.zeros((len(test), data.correct.shape[1]))
@@ -65,23 +73,24 @@ class TaskRouter:
         return out
 
 
-def _features(data: Dataset, train: IntArray, test: IntArray) -> tuple[csr_matrix, csr_matrix]:
+def _features(
+    data: Dataset, train: IntArray, test: IntArray, use_task: bool = True
+) -> tuple[csr_matrix, csr_matrix]:
     tfidf = TfidfVectorizer(ngram_range=(1, 2), min_df=2, max_features=50_000, sublinear_tf=True)
-    onehot = OneHotEncoder(handle_unknown="ignore")
     texts = np.array(data.texts, dtype=object)
-    x_train = hstack(
-        [tfidf.fit_transform(texts[train]), onehot.fit_transform(data.scenarios[train, None])]
-    ).tocsr()
-    x_test = hstack(
-        [tfidf.transform(texts[test]), onehot.transform(data.scenarios[test, None])]
-    ).tocsr()
-    return x_train, x_test
+    x_train, x_test = tfidf.fit_transform(texts[train]), tfidf.transform(texts[test])
+    if use_task:
+        onehot = OneHotEncoder(handle_unknown="ignore")
+        x_train = hstack([x_train, onehot.fit_transform(data.scenarios[train, None])])
+        x_test = hstack([x_test, onehot.transform(data.scenarios[test, None])])
+    return csr_matrix(x_train), csr_matrix(x_test)
 
 
 class KNNRouter:
     """Nearest training prompts by TF-IDF cosine similarity, smoothed toward the task prior."""
 
     name = "kNN (TF-IDF)"
+    uses_task = True
 
     def __init__(self, k: int = 25, prior_weight: float = 5.0) -> None:
         self.k = k
@@ -101,15 +110,15 @@ class KNNRouter:
 
 
 class LogisticRouter:
-    """One logistic regression per model on TF-IDF features plus the task label."""
+    """One logistic regression per model on TF-IDF features, plus the task label if allowed."""
 
-    name = "Logistic (TF-IDF)"
-
-    def __init__(self, c: float = 1.0) -> None:
+    def __init__(self, c: float = 1.0, use_task: bool = True) -> None:
         self.c = c
+        self.uses_task = use_task
+        self.name = "Logistic (TF-IDF)" if use_task else "Logistic (text only)"
 
     def predict(self, data: Dataset, train: IntArray, test: IntArray) -> FloatArray:
-        x_train, x_test = _features(data, train, test)
+        x_train, x_test = _features(data, train, test, self.uses_task)
         out = np.zeros((len(test), data.correct.shape[1]))
         for m in range(data.correct.shape[1]):
             y = data.correct[train, m]
