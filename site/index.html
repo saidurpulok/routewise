@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RouteWise</title>
+<meta name="description" content="RouteWise: how much can a simple learned router save by sending each prompt to the cheapest LLM likely to get it right? Measured offline on per-question results from Stanford's HELM leaderboards.">
+<meta name="author" content="Saidur Rahman Pulok">
+<meta property="og:title" content="RouteWise: Cost-Aware LLM Routing on HELM">
+<meta property="og:description" content="How much can a simple learned router save by sending each prompt to the cheapest model likely to get it right?">
+<meta property="og:type" content="website">
+<meta property="og:image" content="plots/capabilities/cost_quality.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #f6f7f9;
+    --ink: #1c1f24;
+    --ink-soft: #4a5260;
+    --ink-faint: #7a8291;
+    --rule: #e3e6eb;
+    --accent: #1f5fae;
+    --accent-soft: #e8f0fa;
+    --good: #1d7a4a;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --serif: "Source Serif 4", Georgia, serif;
+    --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  section[id] { scroll-margin-top: 12px; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16.5px/1.65 var(--sans);
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 20px; }
+
+  /* Header */
+  header { padding: 64px 0 28px; text-align: center; }
+  h1 {
+    font: 700 clamp(2.4rem, 6vw, 3.4rem)/1.1 var(--serif);
+    letter-spacing: -0.01em;
+    margin: 0 0 14px;
+  }
+  .subtitle {
+    font: 400 clamp(1.1rem, 2.6vw, 1.35rem)/1.45 var(--serif);
+    color: var(--ink-soft);
+    max-width: 720px;
+    margin: 0 auto 22px;
+  }
+  .authors { font-size: 1.05rem; margin: 0 0 4px; }
+  .affil { color: var(--ink-faint); font-size: 0.92rem; margin: 0 0 26px; }
+  .links { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 8px 18px; border-radius: 999px;
+    background: var(--ink); color: #fff; font-weight: 500; font-size: 0.95rem;
+  }
+  .btn:hover { background: #363b44; text-decoration: none; }
+  .btn svg { width: 17px; height: 17px; fill: currentColor; }
+
+  /* Sections */
+  section { padding: 34px 0; border-top: 1px solid var(--rule); }
+  h2 {
+    font: 600 1.7rem/1.2 var(--serif);
+    margin: 0 0 18px;
+    text-align: center;
+  }
+  h3 { font: 600 1.15rem/1.3 var(--serif); margin: 26px 0 8px; }
+  p { margin: 0 0 14px; }
+  .lead { text-align: justify; hyphens: auto; }
+
+  .tldr {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+    margin: 6px 0 4px;
+  }
+  .stat {
+    background: var(--bg-soft); border: 1px solid var(--rule);
+    border-radius: 10px; padding: 16px 16px 14px; text-align: center;
+  }
+  .stat .num { font: 700 1.9rem/1.1 var(--serif); color: var(--accent); }
+  .stat .lbl { font-size: 0.88rem; color: var(--ink-soft); margin-top: 6px; line-height: 1.4; }
+
+  figure { margin: 22px 0; }
+  figure img { width: 100%; height: auto; display: block; border-radius: 6px; border: 1px solid var(--rule); background: #fff; }
+  figcaption { font-size: 0.9rem; color: var(--ink-soft); margin-top: 10px; line-height: 1.5; }
+  figcaption b { color: var(--ink); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .grid2 figure { margin: 0; }
+
+  /* Diagram */
+  .diagram { overflow-x: auto; background: var(--bg-soft); border: 1px solid var(--rule); border-radius: 10px; padding: 18px 10px; }
+  .diagram svg { min-width: 640px; width: 100%; height: auto; display: block; }
+  .diagram text { font-family: var(--sans); }
+
+  .states {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+    gap: 8px; margin: 18px 0 6px; font: 500 0.82rem var(--mono);
+  }
+  .states span.s { padding: 4px 10px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); }
+  .states span.a { color: var(--ink-faint); }
+
+  /* Tables */
+  .table-wrap { overflow-x: auto; margin: 10px 0 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+  th, td { padding: 9px 12px; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: top; }
+  thead th { border-bottom: 2px solid var(--ink); font-weight: 600; white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: 2px solid var(--ink); }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.best { font-weight: 700; color: var(--good); }
+  .tcap { font-size: 0.88rem; color: var(--ink-soft); margin-top: 8px; }
+
+  ul.findings { padding-left: 1.2em; margin: 14px 0 0; }
+  ul.findings li { margin-bottom: 9px; }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  .two-col ul { padding-left: 1.15em; margin: 0; }
+  .two-col li { margin-bottom: 7px; font-size: 0.95rem; }
+
+  pre {
+    background: var(--bg-soft); border: 1px solid var(--rule); border-radius: 8px;
+    padding: 14px 16px; overflow-x: auto; font: 0.84rem/1.6 var(--mono); margin: 10px 0 16px;
+  }
+  code { font-family: var(--mono); font-size: 0.88em; }
+  p code, li code, td code { background: var(--bg-soft); padding: 1px 5px; border-radius: 4px; }
+
+  .note {
+    border-left: 3px solid var(--accent); background: var(--accent-soft);
+    padding: 12px 16px; border-radius: 0 8px 8px 0; font-size: 0.93rem; margin: 18px 0 0;
+  }
+
+  footer { border-top: 1px solid var(--rule); padding: 28px 0 48px; text-align: center; color: var(--ink-faint); font-size: 0.86rem; }
+
+  @media (max-width: 680px) {
+    header { padding-top: 40px; }
+    .tldr { grid-template-columns: 1fr; }
+    .grid2, .two-col { grid-template-columns: 1fr; }
+    .lead { text-align: left; }
+    .wrap { padding: 0 16px; }
+  }
+
+  /* Hero (v2) */
+  .hero { background: linear-gradient(180deg, #eef3fa 0%, #f7f9fc 55%, #ffffff 100%); border-bottom: 1px solid var(--rule); }
+  .hero header { padding: 76px 20px 48px; }
+  .eyebrow { font: 600 0.76rem/1 var(--sans); letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); margin: 0 0 18px; }
+  .hero h1 { font-size: clamp(2.8rem, 7vw, 4.1rem); margin-bottom: 16px; }
+  .hero .subtitle { color: var(--ink); max-width: 640px; margin-bottom: 22px; }
+  .meta { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 0; font-size: 0.95rem; color: var(--ink-soft); margin: 0 0 30px; }
+  .meta span + span::before { content: "\00b7"; margin: 0 10px; color: var(--ink-faint); }
+  .meta a { color: var(--ink); font-weight: 600; }
+  .btn.ghost { background: #fff; color: var(--ink); border: 1px solid #cfd5de; }
+  .btn.ghost:hover { background: var(--bg-soft); }
+  section.intro { border-top: none; padding-top: 48px; }
+  .overview { display: grid; grid-template-columns: 1.4fr 1fr; gap: 44px; align-items: start; }
+  .kicker { font: 600 0.76rem/1 var(--sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-faint); margin: 0 0 12px; }
+  .summary { font: 400 1.2rem/1.62 var(--serif); color: var(--ink); margin: 0; }
+  .keynums { list-style: none; margin: 0; padding: 0 0 0 28px; border-left: 2px solid var(--rule); }
+  .keynums li { margin: 0 0 20px; }
+  .keynums li:last-child { margin-bottom: 0; }
+  .keynums .num { font: 700 1.7rem/1.15 var(--serif); color: var(--accent); display: block; }
+  .keynums .lbl { display: block; margin-top: 4px; font-size: 0.9rem; color: var(--ink-soft); line-height: 1.45; }
+  .teaser { max-width: 660px; margin: 40px auto 0; }
+  @media (max-width: 680px) {
+    .hero header { padding: 48px 16px 36px; }
+    .overview { grid-template-columns: 1fr; gap: 28px; }
+    .keynums { padding: 22px 0 0; border-left: none; border-top: 2px solid var(--rule); }
+    .summary { font-size: 1.1rem; }
+    .meta { gap: 2px 14px; }
+    .meta span + span::before { content: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+<header class="wrap">
+  <p class="eyebrow">LLM routing &middot; Inference cost</p>
+  <h1>RouteWise</h1>
+  <p class="subtitle">How much can a simple learned router save by sending each prompt to the cheapest model likely to get it right?</p>
+  <p class="meta"><span><a href="https://github.com/saidurpulok">Saidur Rahman Pulok</a></span><span>Independent project</span><span>HELM Capabilities &amp; Lite</span><span>2026</span></p>
+  <nav class="links">
+    <a class="btn" href="https://github.com/saidurpulok/routewise"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> Code</a>
+    <a class="btn ghost" href="#results"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 14h13a.5.5 0 010 1h-13A1.5 1.5 0 010 13.5v-12a.5.5 0 011 0v12a.5.5 0 00.5.5zM4 11V7h2v4H4zm3.5 0V4h2v7h-2zM11 11V2h2v9h-2z"/></svg> Results</a>
+    <a class="btn ghost" href="#method"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 1h12a1 1 0 011 1v12a1 1 0 01-1 1H2a1 1 0 01-1-1V2a1 1 0 011-1zm1 2v3h4V3H3zm6 0v3h4V3H9zM3 8v5h10V8H3z"/></svg> Method</a>
+    <a class="btn ghost" href="#takeaway"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 1h7l3 3v10a1 1 0 01-1 1H3a1 1 0 01-1-1V2a1 1 0 011-1zm1 5v1h8V6H4zm0 3v1h8V9H4zm0 3v1h5v-1H4z"/></svg> Takeaway</a>
+  </nav>
+</header>
+</div>
+
+<main>
+  <section class="wrap intro">
+    <div class="overview">
+      <div>
+        <p class="kicker">TL;DR</p>
+        <p class="summary">RouteWise measures LLM routing offline on Stanford HELM&rsquo;s per-question results, with real token counts and list prices. The saving depends heavily on how good the cheap models already are. On 2025 models, a router matches the best single model for about 25&ndash;30% less. On 2024 models, where cheap models had big blind spots, it matches GPT-4o for 94% less.</p>
+      </div>
+      <ul class="keynums">
+        <li><span class="num">79.6% vs 76.5%</span><span class="lbl">best routed accuracy vs. best single model (Qwen3 235B), 2025 suite</span></li>
+        <li><span class="num">&minus;25&ndash;30%</span><span class="lbl">cost to match Qwen3 235B on 2025 models</span></li>
+        <li><span class="num">&minus;94%</span><span class="lbl">cost to match GPT-4o on 2024 models</span></li>
+      </ul>
+    </div>
+    <figure class="teaser">
+      <img src="plots/capabilities/cost_quality.png" alt="Cost against accuracy for 13 single models and four routers on HELM Capabilities" width="1360" height="880">
+      <figcaption><b>Figure 1.</b> Cost per 1,000 prompts (log scale) against accuracy on 2,987 HELM Capabilities prompts, 5-fold cross-validated. Dots are single models; the dashed line is the best random mix of two single models; the star is an oracle that always picks the cheapest correct model.</figcaption>
+    </figure>
+  </section>
+
+  <section class="wrap">
+    <h2>Abstract</h2>
+    <p class="lead">Routing between LLMs is a common way to cut serving costs, but published savings often depend on an unstated baseline. RouteWise is a small, honest version that can be rerun: real prompts, real per-model outcomes, cross-validation, confidence intervals, and the single-model baselines that make savings look smaller. Stanford&rsquo;s HELM has already asked every model the same questions and scored each answer, so all RouteWise adds is prices and routing.</p>
+    <p class="lead">Four simple routers estimate the probability that each model answers each prompt correctly, and a shared rule trades that off against expected cost. On 13 models released in 2025, open-weight Qwen3 235B is the strongest single model, and routing saves a modest 25&ndash;30% at its accuracy while reaching 79.6% when cost does not matter. On 10 models from 2024, cheap models were strong on some tasks and weak on others, and the same routers match GPT-4o for 94% less. A claim like &ldquo;routing saves 90%&rdquo; only means something next to the best single model it is compared with.</p>
+  </section>
+
+  <section class="wrap" id="method">
+    <h2>Method</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 840 150" role="img" aria-label="RouteWise pipeline: HELM per-question results and list prices form a routing table; routers estimate the probability each model is correct; a shared rule picks the model maximising p_correct minus lambda times expected cost; 5-fold cross-validation traces a cost-accuracy curve.">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0L10 5L0 10z" fill="#7a8291"/>
+          </marker>
+          <style>
+            .bx { fill:#fff; stroke:#c9ced6; stroke-width:1.2; }
+            .bx.k { fill:#e8f0fa; stroke:#1f5fae; }
+            .t { font-size:13px; font-weight:600; fill:#1c1f24; text-anchor:middle; }
+            .st { font-size:11px; fill:#4a5260; text-anchor:middle; }
+            .ln { stroke:#7a8291; stroke-width:1.4; fill:none; marker-end:url(#ar); }
+          </style>
+        </defs>
+        <rect class="bx" x="10" y="14" width="130" height="52" rx="8"/>
+        <text class="t" x="75" y="37">HELM results</text><text class="st" x="75" y="53">per question, per model</text>
+        <rect class="bx" x="10" y="84" width="130" height="52" rx="8"/>
+        <text class="t" x="75" y="107">List prices</text><text class="st" x="75" y="123">per 1M tokens</text>
+        <rect class="bx" x="175" y="49" width="135" height="52" rx="8"/>
+        <text class="t" x="242" y="72">Routing table</text><text class="st" x="242" y="88">correct?, tokens, cost</text>
+        <rect class="bx k" x="345" y="49" width="140" height="52" rx="8"/>
+        <text class="t" x="415" y="72">Router</text><text class="st" x="415" y="88">p(correct | prompt, model)</text>
+        <rect class="bx k" x="520" y="49" width="150" height="52" rx="8"/>
+        <text class="t" x="595" y="72">Selection rule</text><text class="st" x="595" y="88">max p &#8722; &#955; &#183; expected cost</text>
+        <rect class="bx" x="705" y="49" width="125" height="52" rx="8"/>
+        <text class="t" x="767" y="72">Sweep &#955;</text><text class="st" x="767" y="88">cost&#8211;accuracy curve</text>
+        <path class="ln" d="M140 40L171 64"/><path class="ln" d="M140 110L171 86"/>
+        <path class="ln" d="M310 75H341"/><path class="ln" d="M485 75H516"/><path class="ln" d="M670 75H701"/>
+      </svg>
+    </div>
+
+    <h3>Data</h3>
+    <p>Two HELM leaderboards publish every question, each model&rsquo;s answer, the token counts and whether the answer was scored correct. RouteWise keeps the prompts every model in the pool answered.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Suite</th><th>Tasks</th><th class="n">Prompts</th><th class="n">Models</th></tr></thead>
+        <tbody>
+          <tr><td><a href="https://crfm.stanford.edu/helm/capabilities/">HELM Capabilities</a></td><td>MMLU-Pro, GPQA, IFEval, Omni-MATH</td><td class="n">2,987</td><td class="n">13, released 2025</td></tr>
+          <tr><td><a href="https://crfm.stanford.edu/helm/lite/">HELM Lite</a></td><td>GSM8K, MATH, MMLU, MedQA, LegalBench, OpenBookQA</td><td class="n">5,551</td><td class="n">10, released 2024</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="tcap">Prices are public list prices; open-weight models use Together AI&rsquo;s prices, since HELM ran them through Together.</p>
+
+    <h3>Routers</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Router</th><th>What it uses</th></tr></thead>
+        <tbody>
+          <tr><td><b>Task-aware</b></td><td>Each model&rsquo;s training accuracy on the prompt&rsquo;s task</td></tr>
+          <tr><td><b>kNN (TF-IDF)</b></td><td>The 25 most similar training prompts, smoothed toward the task average</td></tr>
+          <tr><td><b>Logistic (TF-IDF)</b></td><td>One logistic regression per model on TF-IDF features and the task label</td></tr>
+          <tr><td><b>Logistic (text only)</b></td><td>The same, with no task label anywhere, including the cost estimate</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="two-col" style="margin-top:22px">
+      <ul>
+        <li><b>Selection:</b> every router shares one rule, choosing the model that maximises <code>p_correct &minus; &lambda; &middot; expected_cost</code>; sweeping &lambda; traces a cost&ndash;accuracy curve. Expected cost uses only what is known before sending: the prompt&rsquo;s real token count and the model&rsquo;s average output length on training prompts.</li>
+        <li><b>Evaluation:</b> 5-fold cross-validation stratified by task, so no router sees the prompt it routes. Savings carry 95% bootstrap intervals over prompts, framed by the best mix of two single models and an oracle.</li>
+      </ul>
+      <ul>
+        <li><b>Missing output tokens:</b> HELM records zero output tokens for every Gemini and DeepSeek-V3 answer, which would make them look almost free. RouteWise imputes the median output length of the other models on the same prompt.</li>
+        <li><b>Hidden reasoning tokens:</b> reasoning models such as GPT-5, o3, Grok 4 and Gemini 3 Pro bill for thinking tokens HELM doesn&rsquo;t record, so their costs can&rsquo;t be recovered and they are left out of the pool.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="wrap" id="results">
+    <h2>Results: 2025 models</h2>
+    <p>HELM Capabilities, 13 models including Claude 4.5, GPT-4.1, Llama 4, Qwen3, Kimi K2 and gpt-oss. The best single model is the open-weight Qwen3 235B Instruct at 76.5% for $1.85 per 1,000 prompts.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Router</th><th class="n">Best accuracy &uarr;</th><th class="n">$ / 1k to match Qwen3 &darr;</th><th class="n">Saving vs Qwen3 (95% CI)</th></tr></thead>
+        <tbody>
+          <tr><td>Task-aware</td><td class="n best">79.6%</td><td class="n best">1.30</td><td class="n">29.8% (&minus;0.3 to 40.6)</td></tr>
+          <tr><td>kNN (TF-IDF)</td><td class="n">78.6%</td><td class="n">1.48</td><td class="n">19.7% (&minus;1.0 to 26.7)</td></tr>
+          <tr><td>Logistic (TF-IDF)</td><td class="n">78.4%</td><td class="n">1.39</td><td class="n">24.9% (5.4 to 32.6)</td></tr>
+          <tr><td>Logistic (text only)</td><td class="n">77.9%</td><td class="n">1.59</td><td class="n">14.0% (4.2 to 19.8)</td></tr>
+          <tr><td style="color:var(--ink-faint)">Oracle (upper bound)</td><td class="n" style="color:var(--ink-faint)">92.1%</td><td class="n" style="color:var(--ink-faint)">0.77</td><td class="n"></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="tcap"><b>Table 1.</b> Routers on HELM Capabilities, 5-fold cross-validated. Best value per column in bold.</p>
+    <ul class="findings">
+      <li><b>Open-weight models lead this mix.</b> Qwen3 235B and gpt-oss-120b are the two most accurate models, at a fraction of closed-model prices. Matching Claude Sonnet 4.5&rsquo;s 71.7% costs $0.86 per 1k prompts instead of $9.31, mostly because cheap open models already beat it on these tasks.</li>
+      <li><b>Against the strongest model, the saving is modest.</b> Matching Qwen3 costs 25&ndash;30% less with routing, and only the logistic router&rsquo;s interval clears zero.</li>
+      <li><b>Routing still beats every single model.</b> The task-aware router reaches 79.6%, 3.1 points above Qwen3, by sending each task to the model that is best at it, and up to 4.0 points above the best mix of two single models at the same cost.</li>
+      <li><b>Knowing the task helps; reading the prompt doesn&rsquo;t.</b> Text-based routers do no better than the task-aware one, and without the task label the saving drops to 14%.</li>
+      <li><b>The headroom is large.</b> The oracle reaches 92.1% for $0.77, so a better quality predictor has a lot to gain.</li>
+    </ul>
+    <figure style="max-width:620px;margin:26px auto 0">
+      <img src="plots/capabilities/routing_mix.png" alt="Share of prompts the task-aware router sends to each model when matching Qwen3 235B" width="1040" height="408" loading="lazy">
+      <figcaption><b>Figure 2.</b> Where the task-aware router sends prompts when matching Qwen3 235B: 48% to gpt-oss-120b, 33% to Qwen3 and 18% to Llama 4 Maverick.</figcaption>
+    </figure>
+
+    <h2 style="margin-top:44px">Results: 2024 models</h2>
+    <p>HELM Lite, 10 models including GPT-4o, Claude 3.5, Gemini 1.5, Llama 3.1, Qwen2.5 and DeepSeek-V3. GPT-4o is the most accurate single model at 79.2% for $3.35 per 1,000 prompts.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Router</th><th class="n">Best accuracy &uarr;</th><th class="n">$ / 1k to match GPT-4o &darr;</th><th class="n">Saving vs GPT-4o (95% CI)</th></tr></thead>
+        <tbody>
+          <tr><td>Task-aware</td><td class="n">82.5%</td><td class="n">0.244</td><td class="n">92.7% (92.2 to 93.9)</td></tr>
+          <tr><td>kNN (TF-IDF)</td><td class="n">82.9%</td><td class="n best">0.187</td><td class="n">94.4% (93.3 to 94.9)</td></tr>
+          <tr><td>Logistic (TF-IDF)</td><td class="n best">83.6%</td><td class="n">0.188</td><td class="n">94.4% (93.9 to 95.1)</td></tr>
+          <tr><td>Logistic (text only)</td><td class="n">83.4%</td><td class="n best">0.187</td><td class="n">94.4% (93.8 to 95.0)</td></tr>
+          <tr><td style="color:var(--ink-faint)">Oracle (upper bound)</td><td class="n" style="color:var(--ink-faint)">94.5%</td><td class="n" style="color:var(--ink-faint)">0.184</td><td class="n"></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="tcap"><b>Table 2.</b> Routers on HELM Lite, 5-fold cross-validated. Best value per column in bold.</p>
+    <ul class="findings">
+        <li><b>The headline saving is mostly DeepSeek-V3.</b> On its own it matches GPT-4o to within 0.1 points for 89% less. Against DeepSeek-V3, the logistic router is 48% cheaper at the same accuracy, or 3.1 points more accurate at the same cost.</li>
+        <li><b>Routing beats every single model.</b> With no cost penalty the logistic router reaches 83.6%, 4.5 points above GPT-4o, for $2.25 per 1k prompts.</li>
+        <li><b>Here the prompt text helps.</b> Reading the prompt makes matching GPT-4o 23% cheaper than the task label alone, and the text-only router does just as well.</li>
+      </ul>
+    <figure style="max-width:760px;margin:26px auto 0">
+        <img src="plots/lite/cost_quality.png" alt="Cost against accuracy for 10 single models and four routers on HELM Lite" width="1360" height="880" loading="lazy">
+        <figcaption><b>Figure 3.</b> Cost against accuracy on 5,551 HELM Lite prompts.</figcaption>
+      </figure>
+  </section>
+
+  <section class="wrap" id="takeaway">
+    <h2>What the two suites say together</h2>
+    <p class="lead">A router saves the most when cheap models are strong on some tasks and weak on others. That was true of 2024 models, where Gemini 1.5 Flash scored 93% on MATH but 33% on GSM8K (partly because of HELM&rsquo;s answer format). Among 2025 models, cheap open-weight models are strong across the board, so the cheapest good choice is often obvious and a router&rsquo;s job is smaller.</p>
+    <p class="note">A claim like &ldquo;routing saves 90%&rdquo; only means something next to the best single model it is compared with.</p>
+  </section>
+
+  <section class="wrap">
+    <h2>Are the probabilities trustworthy?</h2>
+    <div class="grid2" style="align-items:center">
+      <div>
+        <p>The selection rule trusts each router&rsquo;s probability that a model gets a prompt right, so the out-of-fold predictions were checked for calibration. All four routers are well calibrated: when a router says 70%, the model is right about 70% of the time, and expected calibration error is below 0.03 everywhere.</p>
+        <p>Better probabilities don&rsquo;t automatically mean better routing, though. On the 2025 suite the TF-IDF logistic router has the best Brier score (0.188 against 0.202 for task-aware), but it doesn&rsquo;t route better.</p>
+      </div>
+      <figure>
+        <img src="plots/capabilities/calibration.png" alt="Calibration of the four routers on the 2025 suite" width="880" height="832" loading="lazy">
+        <figcaption><b>Figure 4.</b> Reliability of the routers&rsquo; out-of-fold probabilities on HELM Capabilities.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <h2>Related work</h2>
+    <p>RouteWise doesn&rsquo;t propose a new routing method; it is a small, reproducible evaluation of simple ones on public data. The difference is the data: HELM&rsquo;s per-question results for current models, with real token counts, plus the corrections those counts need.</p>
+    <ul class="findings">
+      <li><a href="https://arxiv.org/abs/2305.05176">FrugalGPT</a> (Chen, Zaharia and Zou, 2023) cuts cost with an LLM cascade: try cheap models first and stop when a scorer is confident.</li>
+      <li><a href="https://arxiv.org/abs/2403.12031">RouterBench</a> (Hu et al., 2024) is a benchmark of precomputed outputs for evaluating routers, with the same kind of cost&ndash;quality curves and oracle.</li>
+      <li><a href="https://arxiv.org/abs/2406.18665">RouteLLM</a> (Ong et al., ICLR 2025) trains routers between a strong and a weak model from human preference data.</li>
+    </ul>
+  </section>
+
+  <section class="wrap">
+    <h2>Caveats and next steps</h2>
+    <div class="two-col">
+      <div>
+        <h3 style="margin-top:0">Caveats</h3>
+        <ul>
+          <li>List prices, not your bill: batch discounts, caching and provider choice all move them.</li>
+          <li>Imputed output lengths make Gemini and DeepSeek-V3 costs estimates, not measurements.</li>
+          <li>HELM&rsquo;s prompts and scoring, not production traffic; some scores reflect answer formatting more than ability.</li>
+          <li>Most routers use the task label, which real traffic rarely has.</li>
+          <li>One run per model with binary correctness; the matched point is picked on the evaluation curve, so it is slightly optimistic.</li>
+        </ul>
+      </div>
+      <div>
+        <h3 style="margin-top:0">What comes next</h3>
+        <ul>
+          <li>Reasoning models, using a source that records thinking tokens.</li>
+          <li>A stronger label-free router, using sentence embeddings or a small fine-tuned encoder in place of TF-IDF.</li>
+          <li>A cascade that tries a cheap model first and escalates on low confidence.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <h2>Run it</h2>
+    <p>Requires Python 3.11+ and <a href="https://docs.astral.sh/uv/">uv</a>. Runs on a laptop in a few minutes; no GPU or API keys needed.</p>
+<pre><code>git clone https://github.com/saidurpulok/routewise && cd routewise
+uv sync --locked --group dev
+uv run routewise fetch   # about 260 MB of HELM files for the 2025 suite
+uv run routewise run     # cross-validates the four routers
+uv run routewise plot    # redraws the plots from results.json</code></pre>
+  </section>
+
+  <section class="wrap" id="citation">
+    <h2>Citation</h2>
+<pre><code>@software{pulok2026routewise,
+  author  = {Pulok, Saidur Rahman},
+  title   = {RouteWise: Cost-Aware LLM Routing Evaluated on HELM},
+  year    = {2026},
+  version = {0.1.0},
+  url     = {https://github.com/saidurpulok/routewise}
+}</code></pre>
+  </section>
+</main>
+
+<footer class="wrap">
+  RouteWise is released under the MIT License. HELM data belongs to Stanford CRFM.
+</footer>
+
+</body>
+</html>
